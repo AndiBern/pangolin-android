@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "net.pangolin.Pangolin.PacketTunnel"
     compileSdk {
-        version = release(36)
+        version = release(37)
     }
 
     defaultConfig {

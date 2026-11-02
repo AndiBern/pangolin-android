@@ -47,6 +47,18 @@
             android:title="Exit Node Takes Precedence Over Resources"
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
+        <!-- Click handling and summaries are set in SettingsActivity (system screen vs. in-app picker) -->
+        <Preference
+            android:key="excludedAppsEntry"
+            android:title="@string/excluded_apps_title"
+            android:persistent="false"
+            app:iconSpaceReserved="false" />
+        <Preference
+            android:key="excludedAppsOtherEntry"
+            android:title="@string/excluded_apps_other_title"
+            android:persistent="false"
+            app:isPreferenceVisible="false"
+            app:iconSpaceReserved="false" />
 
     </PreferenceCategory>
 

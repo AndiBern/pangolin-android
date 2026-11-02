@@ -2,9 +2,13 @@
 package net.pangolin.Pangolin
 
 import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -21,6 +25,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import net.pangolin.Pangolin.databinding.SettingsActivityBinding
 import net.pangolin.Pangolin.util.DnsServerAddress
+import net.pangolin.Pangolin.util.ExcludedApplications
 import net.pangolin.Pangolin.util.TunnelManager
 
 class SettingsActivity : BaseNavigationActivity() {
@@ -50,6 +55,7 @@ class SettingsActivity : BaseNavigationActivity() {
 
     class SettingsFragment : PreferenceFragmentCompat() {
         private var isTunnelActive = false
+        private var exclusionEditor = ExcludedApplications.Editor.IN_APP
         private val notificationPermissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
@@ -96,6 +102,8 @@ class SettingsActivity : BaseNavigationActivity() {
 
             // Setup DNS settings dependencies
             setupDnsSettingsDependencies()
+
+            setupExcludedApps()
             
             // Observe tunnel state and disable settings when tunnel is active
             lifecycleScope.launch {
@@ -155,6 +163,73 @@ class SettingsActivity : BaseNavigationActivity() {
             updateDnsSettings()
         }
         
+        override fun onResume() {
+            super.onResume()
+            // The in-app list may have changed in ExcludedAppsActivity
+            refreshExcludedAppsEntries()
+        }
+
+        /** Android 17's system exclusion screen, or null where it doesn't exist. */
+        private fun systemExclusionSettingsIntent(): Intent? {
+            if (Build.VERSION.SDK_INT < ExcludedApplications.SYSTEM_SETTINGS_MIN_SDK) return null
+            val intent = Intent(Settings.ACTION_VPN_APP_EXCLUSION_SETTINGS)
+            return intent.takeIf { it.resolveActivity(requireContext().packageManager) != null }
+        }
+
+        private fun setupExcludedApps() {
+            exclusionEditor = ExcludedApplications.editorFor(
+                Build.VERSION.SDK_INT,
+                systemExclusionSettingsIntent() != null
+            )
+
+            findPreference<Preference>(EXCLUDED_APPS_ENTRY)?.setOnPreferenceClickListener {
+                when (exclusionEditor) {
+                    ExcludedApplications.Editor.SYSTEM_SETTINGS -> openSystemExclusionSettings()
+                    ExcludedApplications.Editor.IN_APP -> openInAppExclusionPicker()
+                }
+                true
+            }
+            findPreference<Preference>(EXCLUDED_APPS_OTHER_ENTRY)?.setOnPreferenceClickListener {
+                openInAppExclusionPicker()
+                true
+            }
+            refreshExcludedAppsEntries()
+        }
+
+        private fun openSystemExclusionSettings() {
+            val intent = systemExclusionSettingsIntent()
+            try {
+                if (intent == null) throw ActivityNotFoundException()
+                startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                Log.w("SettingsActivity", "VPN app exclusion settings unavailable, using in-app picker", e)
+                Toast.makeText(requireContext(), R.string.excluded_apps_settings_unavailable, Toast.LENGTH_SHORT).show()
+                openInAppExclusionPicker()
+            }
+        }
+
+        private fun openInAppExclusionPicker() {
+            startActivity(Intent(requireContext(), ExcludedAppsActivity::class.java))
+        }
+
+        private fun refreshExcludedAppsEntries() {
+            val inAppList = preferenceManager.sharedPreferences
+                ?.getStringSet(ExcludedApplications.PREF_KEY, null).orEmpty()
+            val count = inAppList.size
+
+            findPreference<Preference>(EXCLUDED_APPS_ENTRY)?.summary = when (exclusionEditor) {
+                ExcludedApplications.Editor.SYSTEM_SETTINGS -> getString(R.string.excluded_apps_system_summary)
+                ExcludedApplications.Editor.IN_APP ->
+                    if (count == 0) getString(R.string.excluded_apps_none)
+                    else resources.getQuantityString(R.plurals.excluded_apps_count, count, count)
+            }
+            findPreference<Preference>(EXCLUDED_APPS_OTHER_ENTRY)?.apply {
+                isVisible = ExcludedApplications.showOtherAppsEntry(exclusionEditor)
+                summary = if (count == 0) getString(R.string.excluded_apps_other_none)
+                    else resources.getQuantityString(R.plurals.excluded_apps_other_count, count, count)
+            }
+        }
+
         private fun updateLockInfo() {
             val infoPreference = findPreference<Preference>("tunnel_lock_info")
             infoPreference?.apply {
@@ -187,6 +262,11 @@ class SettingsActivity : BaseNavigationActivity() {
 
                 // Presentation only: keep this switch usable while connected.
                 if (preference.key == "persistentVpnNotification") continue
+
+                // Android's exclusion screen applies changes to a running VPN immediately.
+                if (preference.key == EXCLUDED_APPS_ENTRY &&
+                    exclusionEditor == ExcludedApplications.Editor.SYSTEM_SETTINGS
+                ) continue
                 
                 // Skip the info/link preference at the top
                 if (preference.key == null && preference.title?.toString()?.contains("docs") == true) {
@@ -315,6 +395,11 @@ class SettingsActivity : BaseNavigationActivity() {
             } else {
                 super.onDisplayPreferenceDialog(preference)
             }
+        }
+
+        private companion object {
+            const val EXCLUDED_APPS_ENTRY = "excludedAppsEntry"
+            const val EXCLUDED_APPS_OTHER_ENTRY = "excludedAppsOtherEntry"
         }
     }
 }
